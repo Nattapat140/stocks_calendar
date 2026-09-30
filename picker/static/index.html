@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Choose calendar events</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">SET X Calendar</p>
+        <h1>Choose what goes on the calendar</h1>
+        <p id="summary" class="summary">Loading events…</p>
+        <p id="dry-run" class="banner" hidden>Dry run. Nothing will be written to the calendar.</p>
+      </header>
+
+      <section>
+        <div class="section-heading">
+          <h2>Calendar</h2>
+          <p>My SET calendar is created once for this Google account, then reused on later syncs. Configured calendar uses CALENDAR_ID from .env.</p>
+        </div>
+        <div class="targets">
+          <label>
+            <input type="radio" name="calendar-target" value="owned" checked />
+            <span>
+              My SET calendar
+              <small>Create once if missing, then reuse it</small>
+            </span>
+          </label>
+          <label>
+            <input type="radio" name="calendar-target" value="configured" />
+            <span>
+              Configured calendar
+              <small id="configured-id">Uses CALENDAR_ID from .env</small>
+            </span>
+          </label>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-heading">
+          <h2>Event types</h2>
+          <p>A company event is added only when both its ticker and its type are selected. Holidays ignore tickers.</p>
+        </div>
+        <div id="types" class="types"></div>
+      </section>
+
+      <section>
+        <div class="section-heading">
+          <h2>Tickers</h2>
+          <p id="ticker-count">Loading companies…</p>
+        </div>
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Search tickers" autocomplete="off" spellcheck="false" />
+          <button id="select-visible" type="button">Select shown</button>
+          <button id="clear-visible" type="button">Clear shown</button>
+        </div>
+        <div id="tickers" class="tickers"></div>
+      </section>
+    </main>
+
+    <footer>
+      <p id="choice">0 tickers selected</p>
+      <button id="sync" type="button" disabled>Sync to calendar</button>
+    </footer>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

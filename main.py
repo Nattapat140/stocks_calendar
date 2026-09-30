@@ -19,7 +19,7 @@ def get_settings():
 
     calendar_id = os.getenv("CALENDAR_ID", "primary").strip('"\'')
     scopes_value = os.getenv(
-        "SCOPES", '["https://www.googleapis.com/auth/calendar.events"]'
+        "SCOPES", '["https://www.googleapis.com/auth/calendar"]'
     )
     try:
         scopes = json.loads(scopes_value)
@@ -41,16 +41,35 @@ def find_client_secret_file():
     return files[0]
 
 
+def token_covers_scopes(credentials, scopes):
+    granted = set(credentials.scopes or [])
+    return set(scopes).issubset(granted)
+
+
 def authorize(scopes):
     credentials = None
 
     if TOKEN_FILE.exists():
         credentials = Credentials.from_authorized_user_file(TOKEN_FILE, scopes)
 
-    if not credentials or not credentials.valid:
+    needs_consent = (
+        not credentials
+        or not token_covers_scopes(credentials, scopes)
+        or not credentials.valid
+    )
+    if needs_consent:
+        if (
+            credentials
+            and credentials.valid
+            and not token_covers_scopes(credentials, scopes)
+        ):
+            credentials = None
         if credentials and credentials.expired and credentials.refresh_token:
-            credentials.refresh(Request())
-        else:
+            if token_covers_scopes(credentials, scopes):
+                credentials.refresh(Request())
+            else:
+                credentials = None
+        if not credentials or not credentials.valid:
             flow = InstalledAppFlow.from_client_secrets_file(
                 find_client_secret_file(), scopes
             )

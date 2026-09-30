@@ -1,0 +1,179 @@
+:root {
+  color-scheme: light;
+  --ink: #1c1915;
+  --muted: #5e584f;
+  --line: #e4dccf;
+  --paper: #f7f3ec;
+  --card: #fffdf9;
+  --accent: #0f6e56;
+  --accent-ink: #ffffff;
+  --warn: #8a4b12;
+  --warn-bg: #fff4e8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+main {
+  width: min(760px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 32px 0 112px;
+}
+
+header h1,
+.section-heading h2 {
+  margin: 0;
+  font-weight: 650;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.summary,
+.section-heading p,
+#ticker-count,
+footer p {
+  color: var(--muted);
+}
+
+.banner {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+section {
+  margin-top: 28px;
+}
+
+.section-heading {
+  margin-bottom: 12px;
+}
+
+.section-heading p,
+#ticker-count {
+  margin: 6px 0 0;
+}
+
+.types,
+.tickers,
+.toolbar,
+.targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.targets {
+  flex-direction: column;
+}
+
+.types label,
+.tickers label,
+.targets label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.tickers {
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.tickers label {
+  width: calc(33.333% - 6px);
+}
+
+.tickers label[hidden] {
+  display: none;
+}
+
+.tickers label span,
+.types label span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tickers small,
+.types small {
+  color: var(--muted);
+}
+
+.toolbar input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+}
+
+button {
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+footer {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--card);
+}
+
+footer p {
+  margin: 0;
+}
+
+#sync {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+@media (max-width: 640px) {
+  .tickers label {
+    width: calc(50% - 4px);
+  }
+}
