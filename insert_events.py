@@ -7,13 +7,18 @@ from datetime import date, datetime, timedelta
 
 from google.cloud.firestore_v1.base_query import FieldFilter
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from check_connection_firestore_db import get_firestore_client
-from main import authorize, get_settings
+from main import BASE_DIR, authorize, get_settings
+from picker.server import prompt_selection
 
 
 YEAR = 2026
 COLLECTION = "set_x_calendar_2026"
+OWNED_CALENDAR_NAME = "SET X Calendar 2026"
+OWNED_CALENDAR_MARKER = "xd-calendar:set_x_calendar_2026"
+OWNED_CALENDAR_ID_FILE = BASE_DIR / ".set_calendar_id"
 
 COLOR_IDS = {
     "Meeting": "9",
@@ -41,6 +46,103 @@ EMOJIS = {
     "SET Holiday": "⚫",
 }
 
+EVENT_TYPE_ORDER = (
+    "XD",
+    "XR",
+    "XW",
+    "XT",
+    "XE",
+    "XN",
+    "XB",
+    "XM",
+    "Meeting",
+    "SET Holiday",
+)
+
+
+def save_owned_calendar_id(calendar_id):
+    OWNED_CALENDAR_ID_FILE.write_text(calendar_id, encoding="utf-8")
+
+
+def load_saved_owned_calendar_id():
+    if not OWNED_CALENDAR_ID_FILE.exists():
+        return None
+    calendar_id = OWNED_CALENDAR_ID_FILE.read_text(encoding="utf-8").strip()
+    return calendar_id or None
+
+
+def calendar_exists(calendar, calendar_id):
+    try:
+        calendar.calendars().get(calendarId=calendar_id).execute(num_retries=3)
+        return True
+    except HttpError as error:
+        status = getattr(error, "status_code", None) or int(error.resp.status)
+        if status == 404:
+            return False
+        raise
+
+
+def find_marked_owned_calendar(calendar):
+    page_token = None
+    while True:
+        response = (
+            calendar.calendarList()
+            .list(maxResults=250, pageToken=page_token)
+            .execute(num_retries=3)
+        )
+        for item in response.get("items", []):
+            description = item.get("description") or ""
+            if OWNED_CALENDAR_MARKER in description:
+                return item["id"]
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            return None
+
+
+def create_owned_calendar(calendar):
+    created = (
+        calendar.calendars()
+        .insert(
+            body={
+                "summary": OWNED_CALENDAR_NAME,
+                "description": (
+                    "SET X Calendar events managed by the XD Calendar script. "
+                    f"{OWNED_CALENDAR_MARKER}"
+                ),
+                "timeZone": "Asia/Bangkok",
+            }
+        )
+        .execute(num_retries=3)
+    )
+    return created["id"]
+
+
+def resolve_calendar_id(calendar, configured_id, calendar_target, dry_run=False):
+    """Return the Google calendar id and whether a real run would create it."""
+    if calendar_target == "configured":
+        return configured_id, False
+
+    saved_id = load_saved_owned_calendar_id()
+    if saved_id and calendar_exists(calendar, saved_id):
+        return saved_id, False
+
+    marked_id = find_marked_owned_calendar(calendar)
+    if marked_id:
+        save_owned_calendar_id(marked_id)
+        return marked_id, False
+
+    if dry_run:
+        print(
+            "Dry run: My SET calendar does not exist yet. "
+            "A real run would create SET X Calendar 2026 once and reuse it later."
+        )
+        return None, True
+
+    calendar_id = create_owned_calendar(calendar)
+    save_owned_calendar_id(calendar_id)
+    print(f"Created calendar '{OWNED_CALENDAR_NAME}': {calendar_id}")
+    return calendar_id, False
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -49,7 +151,7 @@ def parse_args():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Read Firestore and Calendar, but do not create or update events.",
+        help="Read Firestore and Calendar, but do not create, update, or delete events.",
     )
     parser.add_argument(
         "--month",
@@ -60,7 +162,7 @@ def parse_args():
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Print every created, updated, or skipped event.",
+        help="Print every created, updated, skipped, or deleted event.",
     )
     return parser.parse_args()
 
@@ -258,6 +360,39 @@ def event_kind(record):
     return record.get("event_type") or "SET Event"
 
 
+def selection_options(records):
+    symbol_counts = {}
+    type_counts = {kind: 0 for kind in EVENT_TYPE_ORDER}
+    for _, record in records:
+        kind = event_kind(record)
+        type_counts[kind] = type_counts.get(kind, 0) + 1
+        if record.get("category") == "set_holiday":
+            continue
+        symbol = (record.get("symbol") or "").strip()
+        if symbol:
+            symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
+
+    extra_types = sorted(kind for kind in type_counts if kind not in EVENT_TYPE_ORDER)
+    return {
+        "symbols": [
+            {"symbol": symbol, "count": count}
+            for symbol, count in sorted(symbol_counts.items())
+        ],
+        "event_types": [
+            {"type": kind, "count": type_counts.get(kind, 0)}
+            for kind in (*EVENT_TYPE_ORDER, *extra_types)
+        ],
+    }
+
+
+def record_matches(record, symbols, event_types):
+    """Company rows need both a selected ticker and event type. Holidays need only the type."""
+    if record.get("category") == "set_holiday":
+        return "SET Holiday" in event_types
+    symbol = (record.get("symbol") or "").strip()
+    return symbol in symbols and event_kind(record) in event_types
+
+
 def event_summary(record):
     kind = event_kind(record)
     emoji = EMOJIS.get(kind, "⚪")
@@ -355,6 +490,32 @@ def load_existing_events(calendar, calendar_id):
             return events
 
 
+def event_start_date(event):
+    start = event.get("start") or {}
+    if start.get("date"):
+        return start["date"]
+    return (start.get("dateTime") or "")[:10]
+
+
+def event_in_period(event, month):
+    iso_date = event_start_date(event)
+    if len(iso_date) < 7 or not iso_date.startswith(f"{YEAR}-"):
+        return False
+    if month is None:
+        return True
+    return iso_date[5:7] == f"{month:02d}"
+
+
+def delete_event(calendar, calendar_id, event_id, dry_run=False):
+    if not dry_run:
+        (
+            calendar.events()
+            .delete(calendarId=calendar_id, eventId=event_id)
+            .execute(num_retries=3)
+        )
+    return "delete"
+
+
 def sync_event(calendar, calendar_id, event_id, body, existing=None, dry_run=False):
     desired_hash = body["extendedProperties"]["private"]["set_content_hash"]
 
@@ -394,26 +555,64 @@ def main():
             + (f"-{args.month:02d}." if args.month else ".")
         )
 
-    calendar_id, scopes = get_settings()
-    calendar = build("calendar", "v3", credentials=authorize(scopes))
-    existing_events = load_existing_events(calendar, calendar_id)
-    counts = {"create": 0, "update": 0, "skip": 0, "failed": 0}
-
     period = datetime(YEAR, args.month, 1).strftime("%B %Y") if args.month else str(YEAR)
+    options = selection_options(records)
+    options["dry_run"] = args.dry_run
+    options["period"] = period
+    configured_id, scopes = get_settings()
+    options["configured_calendar_id"] = configured_id
+    print(f"Loaded {len(records)} SET records for {period}.")
+    try:
+        selection = prompt_selection(options)
+    except KeyboardInterrupt:
+        print("\nPicker closed before a selection was submitted.")
+        raise SystemExit(1) from None
+
+    symbols = set(selection["symbols"])
+    event_types = set(selection["event_types"])
+    calendar_target = selection.get("calendar_target", "owned")
+    selected = [
+        item
+        for item in records
+        if record_matches(item[1], symbols, event_types)
+    ]
     print(
-        f"{'Dry run: ' if args.dry_run else ''}processing {len(records)} "
-        f"SET records for {period}."
+        f"Selected {len(selected)} of {len(records)} records "
+        f"({len(symbols)} tickers, {len(event_types)} event types)."
     )
-    for index, (firestore_id, record) in enumerate(records, start=1):
+
+    calendar = build("calendar", "v3", credentials=authorize(scopes))
+    calendar_id, would_create = resolve_calendar_id(
+        calendar, configured_id, calendar_target, dry_run=args.dry_run
+    )
+    if calendar_id:
+        target_label = (
+            OWNED_CALENDAR_NAME
+            if calendar_target == "owned"
+            else configured_id
+        )
+        print(f"Using calendar {target_label}: {calendar_id}")
+        existing_events = load_existing_events(calendar, calendar_id)
+    else:
+        existing_events = {}
+    counts = {"create": 0, "update": 0, "skip": 0, "delete": 0, "failed": 0}
+    desired_ids = set()
+
+    print(
+        f"{'Dry run: ' if args.dry_run else ''}processing {len(selected)} "
+        f"selected SET records for {period}."
+    )
+    for index, (firestore_id, record) in enumerate(selected, start=1):
         event_id, body = build_event_body(record)
+        desired_ids.add(event_id)
         try:
             action = sync_event(
                 calendar,
-                calendar_id,
+                calendar_id or OWNED_CALENDAR_NAME,
                 event_id,
                 body,
                 existing=existing_events.get(event_id),
-                dry_run=args.dry_run,
+                dry_run=args.dry_run or would_create,
             )
             counts[action] += 1
             if args.verbose:
@@ -421,8 +620,8 @@ def main():
                     f"{action.upper():6} {body['start']['date']}  "
                     f"{body['summary']}  [{firestore_id}]"
                 )
-            elif index % 100 == 0 or index == len(records):
-                print(f"Processed {index}/{len(records)} records...")
+            elif index % 100 == 0 or index == len(selected):
+                print(f"Processed {index}/{len(selected)} records...")
         except Exception as error:
             counts["failed"] += 1
             print(
@@ -430,10 +629,35 @@ def main():
                 file=sys.stderr,
             )
 
+    removals = [
+        (event_id, event)
+        for event_id, event in existing_events.items()
+        if event_id not in desired_ids and event_in_period(event, args.month)
+    ]
+    for index, (event_id, event) in enumerate(removals, start=1):
+        label = event.get("summary") or event_id
+        when = event_start_date(event) or "-"
+        try:
+            action = delete_event(
+                calendar,
+                calendar_id,
+                event_id,
+                dry_run=args.dry_run or would_create,
+            )
+            counts[action] += 1
+            if args.verbose:
+                print(f"{action.upper():6} {when}  {label}  [{event_id}]")
+            elif index % 100 == 0 or index == len(removals):
+                print(f"Removed {index}/{len(removals)} unselected events...")
+        except Exception as error:
+            counts["failed"] += 1
+            print(f"FAILED {when}  {label}: {error}", file=sys.stderr)
+
     print(
         "Summary: "
         f"create={counts['create']}, update={counts['update']}, "
-        f"skip={counts['skip']}, failed={counts['failed']}"
+        f"skip={counts['skip']}, delete={counts['delete']}, "
+        f"failed={counts['failed']}"
     )
     if counts["failed"]:
         raise SystemExit(1)
